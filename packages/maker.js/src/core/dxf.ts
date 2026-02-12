@@ -37,6 +37,39 @@ namespace MakerJs.exporter {
             }
         }
 
+        // -------------------------
+        // ✅ Unicode / Japanese text support
+        // Encode non-ASCII as AutoCAD-style \U+XXXX
+        // -------------------------
+        function encodeDxfText(s: string): string {
+            let out = "";
+
+            for (let i = 0; i < s.length; i++) {
+                const ch = s[i];
+                const code = s.charCodeAt(i);
+
+                // escape DXF text control characters
+                if (ch === "\\") { out += "\\\\"; continue; }
+                if (ch === "{") { out += "\\{"; continue; }
+                if (ch === "}") { out += "\\}"; continue; }
+
+                // TEXT entity doesn't support multi-line well; replace newline with space
+                if (ch === "\r") continue;
+                if (ch === "\n") { out += " "; continue; }
+
+                // printable ASCII
+                if (code >= 0x20 && code <= 0x7E) {
+                    out += ch;
+                    continue;
+                }
+
+                // Japanese is in BMP -> 4 hex digits works
+                out += "\\U+" + code.toString(16).toUpperCase().padStart(4, "0");
+            }
+
+            return out;
+        }
+
         function colorLayerOptions(layer: string): IDXFLayerOptions {
             if (opts.layerOptions && opts.layerOptions[layer]) return opts.layerOptions[layer];
 
@@ -82,7 +115,7 @@ namespace MakerJs.exporter {
                 ]
             };
 
-            lineEntity.lineType = lineTypeLayerOptions(layerId);
+            (lineEntity as any).lineType = lineTypeLayerOptions(layerId);
             return lineEntity;
         };
 
@@ -99,7 +132,7 @@ namespace MakerJs.exporter {
                 radius: round(circle.radius, opts.accuracy)
             };
 
-            circleEntity.lineType = lineTypeLayerOptions(layerId);
+            (circleEntity as any).lineType = lineTypeLayerOptions(layerId);
             return circleEntity;
         };
 
@@ -118,7 +151,7 @@ namespace MakerJs.exporter {
                 endAngle: round(arc.endAngle, opts.accuracy)
             };
 
-            arcEntity.lineType = lineTypeLayerOptions(layerId);
+            (arcEntity as any).lineType = lineTypeLayerOptions(layerId);
             return arcEntity;
         };
 
@@ -144,7 +177,7 @@ namespace MakerJs.exporter {
                 vertices: []
             };
 
-            polylineEntity.lineType = lineTypeLayerOptions(polylineEntity.layer);
+            (polylineEntity as any).lineType = lineTypeLayerOptions(polylineEntity.layer);
 
             c.chain.links.forEach((link, i) => {
                 let bulge: number;
@@ -168,6 +201,7 @@ namespace MakerJs.exporter {
             return polylineEntity;
         }
 
+        // ✅ TEXT entity with Unicode encoding + STYLE reference
         function text(caption: ICaption & { layer?: string }) {
             const layerId = defaultLayer(null, caption.layer);
             const layerOptions = colorLayerOptions(layerId);
@@ -178,21 +212,46 @@ namespace MakerJs.exporter {
                 endPoint: appendVertex(center, null),
                 layer: layerId,
                 textHeight: (layerOptions && layerOptions.fontSize) || opts.fontSize,
-                text: caption.text,
+                text: encodeDxfText(caption.text), // ✅ Japanese supported here
                 halign: 4, // Middle
                 valign: 0, // Baseline
                 rotation: angle.ofPointInDegrees(caption.anchor.origin, caption.anchor.end)
             };
+
+            // STYLE name (we output it in TABLES -> STYLE)
+            (textEntity as any).styleName = (opts as any).textStyleName || "JP";
+
             return textEntity;
         }
+
+        function textFromOptions(t: IDXFText): DxfParser.EntityTEXT {
+            const layerId = defaultLayer(null, t.layer || "0");
+            const layerOptions = colorLayerOptions(layerId);
+
+            const textEntity: DxfParser.EntityTEXT = {
+                type: "TEXT",
+                startPoint: appendVertex([t.x, t.y] as any, null),
+                endPoint: appendVertex([t.x, t.y] as any, null),
+                layer: layerId,
+                textHeight: t.height ?? ((layerOptions && layerOptions.fontSize) || opts.fontSize),
+                text: encodeDxfText(t.text),
+                halign: t.halign ?? 0,
+                valign: t.valign ?? 0,
+                rotation: t.rotation ?? 0
+            };
+
+            (textEntity as any).styleName = t.styleName || (opts as any).textStyleName || "JP";
+            return textEntity;
+        }
+
 
         function layerOut(layerId: string, layerColor: number) {
             const layerEntity: DxfParser.Layer = {
                 name: layerId,
                 color: layerColor
-            };
+            } as any;
 
-            layerEntity.lineType = lineTypeLayerOptions(layerId);
+            (layerEntity as any).lineType = lineTypeLayerOptions(layerId);
             return layerEntity;
         }
 
@@ -207,21 +266,21 @@ namespace MakerJs.exporter {
                         description: "______",
                         patternLength: 0,
                         elements: []
-                    },
+                    } as any,
 
                     "DASHED": {
                         name: "DASHED",
                         description: "_ _ _ ",
                         elements: [5, -2.5],
                         patternLength: 7.5
-                    },
+                    } as any,
 
                     "DOTTED": {
                         name: "DOTTED",
                         description: ". . . ",
                         elements: [0.5, -1.0],
                         patternLength: 1.5
-                    }
+                    } as any
                 }
             };
             const tableName: DxfParser.TableNames = 'lineType';
@@ -242,11 +301,29 @@ namespace MakerJs.exporter {
             doc.tables[tableName] = layerTable;
         }
 
+        // ✅ STYLE table output (choose a Japanese-capable font)
+        function stylesOut() {
+            const styleTable: any = {
+                styles: {
+                    "STANDARD": { name: "STANDARD", fontFile: "txt.shx" },
+                    // Choose what you want:
+                    // - "MS Gothic" / "Yu Gothic" are Windows fonts, but DXF STYLE usually expects a font file name.
+                    // - Many CADs accept TTF file names (e.g., "msgothic.ttc", "YuGothic.ttf") if available.
+                    "JP": { name: "JP", fontFile: (opts as any).jpFontFile || "YuGothic.ttf" }
+                }
+            };
+            doc.tables["style" as any] = styleTable;
+        }
+
         function header() {
             if (opts.units) {
                 var units = dxfUnit[opts.units];
                 doc.header["$INSUNITS"] = units;
             }
+
+            // Optional: Some CADs behave better when codepage is declared.
+            // Our header writer supports strings (group code 3) below.
+            // doc.header["$DWGCODEPAGE"] = (opts as any).codePage || "ANSI_932"; // Shift-JIS
         }
 
         function entities(walkedPaths: IWalkPath[], chains: IChainOnLayer[], captions: (ICaption & { layer?: string })[]) {
@@ -303,10 +380,18 @@ namespace MakerJs.exporter {
         }
         entities(walkedPaths, chainsOnLayers, model.getAllCaptionsOffset(modelToExport));
 
+        if ((opts as any).texts && Array.isArray((opts as any).texts)) {
+            (opts as any).texts.forEach((t: IDXFText) => {
+                doc.entities.push(textFromOptions(t));
+            });
+        }
+
+
         header();
 
         lineTypesOut();
         layersOut();
+        stylesOut(); // ✅ add STYLE table
 
         return outputDocument(doc);
     }
@@ -321,7 +406,7 @@ namespace MakerJs.exporter {
             dxf.push.apply(dxf, values);
         }
 
-        function appendLineType(entity: DxfParser.Entity) {
+        function appendLineType(entity: any) {
             const lt = entity.lineType as string | undefined;
             if (lt) {
                 append("6", lt);
@@ -428,28 +513,21 @@ namespace MakerJs.exporter {
             append("0", "SEQEND");
         }
 
+        // ✅ TEXT: add STYLE with group code 7
         map["TEXT"] = function (text: DxfParser.EntityTEXT) {
-            append("0", "TEXT",
-                "10",
-                text.startPoint.x,
-                "20",
-                text.startPoint.y,
-                "11",
-                text.endPoint.x,
-                "21",
-                text.endPoint.y,
-                "40",
-                text.textHeight,
-                "1",
-                text.text,
-                "50",
-                text.rotation,
-                "8",
-                text.layer,
-                "72",
-                text.halign,
-                "73",
-                text.valign
+            append(
+                "0", "TEXT",
+                "10", text.startPoint.x,
+                "20", text.startPoint.y,
+                "11", text.endPoint.x,
+                "21", text.endPoint.y,
+                "40", text.textHeight,
+                "1", text.text,
+                "50", text.rotation,
+                "8", text.layer,
+                "7", (text as any).styleName || "STANDARD", // ✅
+                "72", text.halign,
+                "73", text.valign
             );
         }
 
@@ -472,10 +550,11 @@ namespace MakerJs.exporter {
 
             table(lineTypesOut);
             table(layersOut);
+            table(stylesOut); // ✅ add
         }
 
         function layerOut(layer: DxfParser.Layer) {
-            const lt = (layer.lineType || "CONTINUOUS") as string;
+            const lt = ((layer as any).lineType || "CONTINUOUS") as string;
 
             append("0", "LAYER",
                 "2",
@@ -490,7 +569,7 @@ namespace MakerJs.exporter {
         }
 
         function lineTypeOut(lineType: DxfParser.LineType) {
-            const elements: number[] = ((lineType.elements) || []) as number[];
+            const elements: number[] = (((lineType as any).elements) || []) as number[];
 
             append("0", "LTYPE",
                 "72", //72 Alignment code; value is always 65, the ASCII code for A
@@ -534,12 +613,43 @@ namespace MakerJs.exporter {
             }
         }
 
+        // ✅ STYLE table writer
+        function stylesOut() {
+            const styleTable = doc.tables["style" as any] as any;
+            append("2", "STYLE");
+
+            for (const styleId in styleTable.styles) {
+                const st = styleTable.styles[styleId];
+                append(
+                    "0", "STYLE",
+                    "2", st.name,
+                    "70", "0",
+                    "40", 0,
+                    "41", 1,
+                    "50", 0,
+                    "71", 0,
+                    "42", 0,
+                    "3", st.fontFile || "txt.shx",
+                    "4", ""
+                );
+            }
+        }
+
+        // ✅ Header writer that supports strings and integers
         function header() {
             append("2", "HEADER");
 
             for (let key in doc.header) {
-                let value = doc.header[key];
-                append("9", key, "70", value);
+                const value = (doc.header as any)[key];
+
+                // In DXF:
+                // - string vars often use group code 3
+                // - int vars often use group code 70
+                if (typeof value === "string") {
+                    append("9", key, "3", value);
+                } else {
+                    append("9", key, "70", value);
+                }
             }
         }
 
@@ -623,6 +733,14 @@ namespace MakerJs.exporter {
          * Flag to use POLYLINE
          */
         usePOLYLINE?: boolean;
+
+        // ✅ add this
+        texts?: IDXFText[];
+
+        // Optional extras (not required, but used by the code above if present)
+        // jpFontFile?: string;   // e.g. "YuGothic.ttf" or "msgothic.ttc"
+        // codePage?: string;     // e.g. "ANSI_932"
+        // textStyleName?: string;// e.g. "JP"
     }
 
     /**
@@ -632,4 +750,16 @@ namespace MakerJs.exporter {
         chain: IChain;
         layer: string;
     }
+    export interface IDXFText {
+        text: string;
+        x: number;
+        y: number;
+        layer?: string;
+        rotation?: number;   // degrees
+        height?: number;     // text height
+        halign?: number;     // 0/1/2/3/4/5 (DXF)
+        valign?: number;     // 0..3 (DXF)
+        styleName?: string;  // e.g. "JP"
+    }
+
 }
