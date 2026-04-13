@@ -28,10 +28,26 @@ namespace MakerJs.exporter {
             tables: {}
         };
 
+        interface IDXFDimensionBlockInfo {
+            routeKey: string;
+            blockName: string;
+            insertOffset: IPoint;
+            entities: DxfParser.Entity[];
+            layer: string;
+        }
+
+        interface IDXFCaptionWithRoute extends ICaption {
+            layer?: string;
+            routeKey: string;
+        }
+
+        const dimensionBlocks: IDXFDimensionBlockInfo[] = [];
+
         extendObject(opts, options);
 
+        var modelToExport = itemToExport as IModel;
+
         if (isModel(itemToExport)) {
-            var modelToExport = itemToExport as IModel;
             if (modelToExport.exporterOptions) {
                 extendObject(opts, modelToExport.exporterOptions['toDXF']);
             }
@@ -87,15 +103,55 @@ namespace MakerJs.exporter {
             return "CONTINUOUS";
         }
 
-        function defaultLayer(pathContext: IPath, parentLayer: string) {
-            var layerId = (pathContext && pathContext.layer) || parentLayer || '0';
+        function addLayerId(layerId: string) {
             if (layerIds.indexOf(layerId) < 0) {
                 layerIds.push(layerId);
             }
+        }
+
+        function defaultLayer(pathContext: IPath, parentLayer: string) {
+            var layerId = (pathContext && pathContext.layer) || parentLayer || '0';
+            addLayerId(layerId);
             return layerId;
         }
 
         var map: { [type: string]: (pathValue: IPath, offset: IPoint, layer: string) => DxfParser.Entity; } = {};
+
+        function getDimensionOwner(routeKey: string) {
+            for (let i = 0; i < dimensionBlocks.length; i++) {
+                const block = dimensionBlocks[i];
+                if (routeKey === block.routeKey || routeKey.indexOf(block.routeKey + '.') === 0) {
+                    return block;
+                }
+            }
+            return null;
+        }
+
+        function collectCaptionsWithRoute(modelContext: IModel): IDXFCaptionWithRoute[] {
+            const captions: IDXFCaptionWithRoute[] = [];
+
+            function tryAddCaption(m: IModel, offset: IPoint, layer: string | undefined, routeKey: string) {
+                if (m.caption) {
+                    const modelOffset = point.add((m.origin || point.zero()), offset);
+                    captions.push({
+                        text: m.caption.text,
+                        anchor: path.clone(m.caption.anchor, modelOffset) as IPathLine,
+                        layer: m.caption.anchor.layer || layer || '0',
+                        routeKey
+                    });
+                }
+            }
+
+            tryAddCaption(modelContext, modelContext.origin || point.zero(), modelContext.layer, '');
+
+            model.walk(modelContext, {
+                afterChildWalk: walkedModel => {
+                    tryAddCaption(walkedModel.childModel, walkedModel.offset, walkedModel.layer, walkedModel.routeKey);
+                }
+            });
+
+            return captions;
+        }
 
         map[pathType.Line] = function (line: IPathLine, offset: IPoint, layer: string) {
             const layerId = defaultLayer(line, layer);
@@ -326,18 +382,41 @@ namespace MakerJs.exporter {
             // doc.header["$DWGCODEPAGE"] = (opts as any).codePage || "ANSI_932"; // Shift-JIS
         }
 
-        function entities(walkedPaths: IWalkPath[], chains: IChainOnLayer[], captions: (ICaption & { layer?: string })[]) {
+        function entities(walkedPaths: IWalkPath[], chains: IChainOnLayer[], captions: IDXFCaptionWithRoute[]) {
             const entityArray = doc.entities;
 
             entityArray.push.apply(entityArray, chains.map(polyline));
             walkedPaths.forEach((walkedPath: IWalkPath) => {
                 var fn = map[walkedPath.pathContext.type];
                 if (fn) {
-                    const entity = fn(walkedPath.pathContext, walkedPath.offset, walkedPath.layer);
-                    entityArray.push(entity);
+                    const dimensionOwner = getDimensionOwner(walkedPath.routeKey);
+                    if (dimensionOwner) {
+                        const localOffset = point.subtract(walkedPath.offset, dimensionOwner.insertOffset);
+                        const entity = fn(walkedPath.pathContext, localOffset, walkedPath.layer);
+                        dimensionOwner.entities.push(entity);
+                    } else {
+                        const entity = fn(walkedPath.pathContext, walkedPath.offset, walkedPath.layer);
+                        entityArray.push(entity);
+                    }
                 }
             });
-            entityArray.push.apply(entityArray, captions.map(text));
+
+            captions.forEach(caption => {
+                const dimensionOwner = getDimensionOwner(caption.routeKey);
+                if (dimensionOwner) {
+                    const localCaption: ICaption & { layer?: string } = {
+                        text: caption.text,
+                        layer: caption.layer,
+                        anchor: new paths.Line(
+                            point.subtract(caption.anchor.origin, dimensionOwner.insertOffset),
+                            point.subtract(caption.anchor.end, dimensionOwner.insertOffset)
+                        )
+                    };
+                    dimensionOwner.entities.push(text(localCaption));
+                } else {
+                    entityArray.push(text(caption));
+                }
+            });
         }
 
         //fixup options
@@ -353,6 +432,39 @@ namespace MakerJs.exporter {
         extendObject(options, opts);
 
         //begin dxf output
+
+        if (isModel(modelToExport)) {
+            let dimensionBlockIndex = 0;
+            model.walk(modelToExport, {
+                beforeChildWalk: (walkedModel: IWalkModel) => {
+                    const childModel: any = walkedModel.childModel;
+                    if (childModel && (childModel.dimensionData || childModel.labelData)) {
+                        const insertOffset = point.add(walkedModel.offset, childModel.origin || [0, 0]);
+                        const layerId = walkedModel.layer || '0';
+                        const blockName = 'MKR_DIM_' + (++dimensionBlockIndex);
+                        const blockInfo: IDXFDimensionBlockInfo = {
+                            routeKey: walkedModel.routeKey,
+                            blockName,
+                            insertOffset,
+                            entities: [],
+                            layer: layerId
+                        };
+
+                        dimensionBlocks.push(blockInfo);
+                        addLayerId(layerId);
+
+                        doc.entities.push({
+                            type: 'INSERT',
+                            name: blockName,
+                            layer: layerId,
+                            x: round(insertOffset[0], opts.accuracy),
+                            y: round(insertOffset[1], opts.accuracy)
+                        } as any);
+                    }
+                    return true;
+                }
+            });
+        }
 
         const chainsOnLayers: IChainOnLayer[] = [];
         const walkedPaths: IWalkPath[] = [];
@@ -378,7 +490,7 @@ namespace MakerJs.exporter {
             };
             model.walk(modelToExport, walkOptions);
         }
-        entities(walkedPaths, chainsOnLayers, model.getAllCaptionsOffset(modelToExport));
+        entities(walkedPaths, chainsOnLayers, collectCaptionsWithRoute(modelToExport));
 
         if ((opts as any).texts && Array.isArray((opts as any).texts)) {
             (opts as any).texts.forEach((t: IDXFText) => {
@@ -393,13 +505,13 @@ namespace MakerJs.exporter {
         layersOut();
         stylesOut(); // ✅ add STYLE table
 
-        return outputDocument(doc);
+        return outputDocument(doc, dimensionBlocks);
     }
 
     /**
      * @private
      */
-    function outputDocument(doc: DxfParser.DXFDocument) {
+    function outputDocument(doc: DxfParser.DXFDocument, dimensionBlocks: { blockName: string; entities: DxfParser.Entity[]; layer: string; }[]) {
 
         const dxf: (string | number)[] = [];
         function append(...values: (string | number)[]) {
@@ -528,6 +640,16 @@ namespace MakerJs.exporter {
                 "7", (text as any).styleName || "STANDARD", // ✅
                 "72", text.halign,
                 "73", text.valign
+            );
+        }
+
+        map["INSERT"] = function (insert: any) {
+            append(
+                "0", "INSERT",
+                "8", insert.layer || "0",
+                "2", insert.name,
+                "10", insert.x || 0,
+                "20", insert.y || 0
             );
         }
 
@@ -664,10 +786,42 @@ namespace MakerJs.exporter {
             });
         }
 
+        function blocks() {
+            append("2", "BLOCKS");
+
+            dimensionBlocks.forEach(block => {
+                append(
+                    "0", "BLOCK",
+                    "8", block.layer || "0",
+                    "2", block.blockName,
+                    "70", "0",
+                    "10", 0,
+                    "20", 0,
+                    "3", block.blockName,
+                    "1", ""
+                );
+
+                block.entities.forEach(entity => {
+                    const fn = map[entity.type];
+                    if (fn) {
+                        fn(entity);
+                    }
+                });
+
+                append(
+                    "0", "ENDBLK",
+                    "8", block.layer || "0"
+                );
+            });
+        }
+
         //begin dxf output
 
         section(header);
         section(tables);
+        if (dimensionBlocks.length) {
+            section(blocks);
+        }
         section(() => entities(doc.entities));
 
         append("0", "EOF");
