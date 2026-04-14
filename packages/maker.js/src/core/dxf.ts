@@ -34,6 +34,7 @@ namespace MakerJs.exporter {
             insertOffset: IPoint;
             entities: DxfParser.Entity[];
             layer: string;
+            dimensionData?: any;
         }
 
         interface IDXFCaptionWithRoute extends ICaption {
@@ -116,6 +117,72 @@ namespace MakerJs.exporter {
         }
 
         var map: { [type: string]: (pathValue: IPath, offset: IPoint, layer: string) => DxfParser.Entity; } = {};
+
+        function dxfVertex(p: IPoint, offset: IPoint = point.zero()) {
+            return {
+                x: round(p[0] + offset[0], opts.accuracy),
+                y: round(p[1] + offset[1], opts.accuracy),
+                z: 0
+            };
+        }
+
+        function createDimensionEntity(blockName: string, data: any, offset: IPoint): DxfParser.EntityDIMENSION {
+            const dim: DxfParser.EntityDIMENSION = {
+                type: 'DIMENSION',
+                layer: data.layer || 'DIMENSION',
+                block: blockName,
+                dimensionType: 32,
+                attachmentPoint: 5,
+                text: data.text ? encodeDxfText(data.text) : '',
+                actualMeasurement: data.measuredValue
+            } as any;
+
+            (dim as any).textHeight = data.textHeight;
+            (dim as any).styleName = 'STANDARD';
+            (dim as any).extrusionDirection = { x: 0, y: 0, z: 1 };
+
+            if (data.type === 'linear' || data.type === 'aligned') {
+                const linearData = data as any;
+                const dimensionAngle = linearData.dimensionAngle === undefined
+                    ? angle.ofPointInDegrees(linearData.point1, linearData.point2)
+                    : linearData.dimensionAngle;
+                const dimensionPoint = point.add(linearData.point1, point.fromPolar(angle.toRadians(dimensionAngle + 90), linearData.offset));
+                const defaultTextPosition = point.average(
+                    dimensionPoint,
+                    point.add(linearData.point2, point.fromPolar(angle.toRadians(dimensionAngle + 90), linearData.offset))
+                );
+
+                dim.anchorPoint = dxfVertex(dimensionPoint, offset);
+                dim.middleOfText = dxfVertex(linearData.textPosition || defaultTextPosition, offset);
+                dim.linearOrAngularPoint1 = dxfVertex(linearData.point1, offset);
+                dim.linearOrAngularPoint2 = dxfVertex(linearData.point2, offset);
+                dim.angle = round(dimensionAngle, opts.accuracy);
+                dim.dimensionType = 160;
+                return dim;
+            }
+
+            if (data.type === 'angular') {
+                const angularData = data as any;
+                const angle1 = angle.ofPointInDegrees(angularData.centerPoint, angularData.point1);
+                const arcPoint = point.add(angularData.centerPoint, point.fromPolar(angle.toRadians(angle1), angularData.radius));
+
+                dim.dimensionType = 34;
+                dim.anchorPoint = dxfVertex(arcPoint, offset);
+                dim.middleOfText = dxfVertex(angularData.textPosition || arcPoint, offset);
+                dim.linearOrAngularPoint1 = dxfVertex(angularData.point1, offset);
+                dim.linearOrAngularPoint2 = dxfVertex(angularData.point2, offset);
+                dim.arcPoint = dxfVertex(angularData.centerPoint, offset);
+                return dim;
+            }
+
+            const radialData = data as any;
+            dim.dimensionType = data.type === 'diameter' ? 35 : 36;
+            dim.anchorPoint = dxfVertex(radialData.radiusPoint, offset);
+            dim.middleOfText = dxfVertex(radialData.textPosition || radialData.radiusPoint, offset);
+            dim.linearOrAngularPoint1 = dxfVertex(radialData.centerPoint, offset);
+            dim.diameterOrRadiusPoint = dxfVertex(radialData.radiusPoint, offset);
+            return dim;
+        }
 
         function getDimensionOwner(routeKey: string) {
             for (let i = 0; i < dimensionBlocks.length; i++) {
@@ -391,7 +458,7 @@ namespace MakerJs.exporter {
                 if (fn) {
                     const dimensionOwner = getDimensionOwner(walkedPath.routeKey);
                     if (dimensionOwner) {
-                        const localOffset = point.subtract(walkedPath.offset, dimensionOwner.insertOffset);
+                        const localOffset = dimensionOwner.dimensionData ? walkedPath.offset : point.subtract(walkedPath.offset, dimensionOwner.insertOffset);
                         const entity = fn(walkedPath.pathContext, localOffset, walkedPath.layer);
                         dimensionOwner.entities.push(entity);
                     } else {
@@ -404,12 +471,14 @@ namespace MakerJs.exporter {
             captions.forEach(caption => {
                 const dimensionOwner = getDimensionOwner(caption.routeKey);
                 if (dimensionOwner) {
+                    const captionOrigin = dimensionOwner.dimensionData ? caption.anchor.origin : point.subtract(caption.anchor.origin, dimensionOwner.insertOffset);
+                    const captionEnd = dimensionOwner.dimensionData ? caption.anchor.end : point.subtract(caption.anchor.end, dimensionOwner.insertOffset);
                     const localCaption: ICaption & { layer?: string } = {
                         text: caption.text,
                         layer: caption.layer,
                         anchor: new paths.Line(
-                            point.subtract(caption.anchor.origin, dimensionOwner.insertOffset),
-                            point.subtract(caption.anchor.end, dimensionOwner.insertOffset)
+                            captionOrigin,
+                            captionEnd
                         )
                     };
                     dimensionOwner.entities.push(text(localCaption));
@@ -439,27 +508,33 @@ namespace MakerJs.exporter {
                 beforeChildWalk: (walkedModel: IWalkModel) => {
                     const childModel: any = walkedModel.childModel;
                     if (childModel && (childModel.dimensionData || childModel.labelData)) {
+                        const dimensionData = childModel.dimensionData;
                         const insertOffset = point.add(walkedModel.offset, childModel.origin || [0, 0]);
                         const layerId = walkedModel.layer || '0';
-                        const blockName = 'MKR_DIM_' + (++dimensionBlockIndex);
+                        const blockName = dimensionData ? '*D' + dimensionBlockIndex++ : 'MKR_DIM_' + (++dimensionBlockIndex);
                         const blockInfo: IDXFDimensionBlockInfo = {
                             routeKey: walkedModel.routeKey,
                             blockName,
                             insertOffset,
                             entities: [],
-                            layer: layerId
+                            layer: layerId,
+                            dimensionData
                         };
 
                         dimensionBlocks.push(blockInfo);
                         addLayerId(layerId);
 
-                        doc.entities.push({
-                            type: 'INSERT',
-                            name: blockName,
-                            layer: layerId,
-                            x: round(insertOffset[0], opts.accuracy),
-                            y: round(insertOffset[1], opts.accuracy)
-                        } as any);
+                        if (dimensionData) {
+                            doc.entities.push(createDimensionEntity(blockName, dimensionData, insertOffset));
+                        } else {
+                            doc.entities.push({
+                                type: 'INSERT',
+                                name: blockName,
+                                layer: layerId,
+                                x: round(insertOffset[0], opts.accuracy),
+                                y: round(insertOffset[1], opts.accuracy)
+                            } as any);
+                        }
                     }
                     return true;
                 }
@@ -511,7 +586,7 @@ namespace MakerJs.exporter {
     /**
      * @private
      */
-    function outputDocument(doc: DxfParser.DXFDocument, dimensionBlocks: { blockName: string; entities: DxfParser.Entity[]; layer: string; }[]) {
+    function outputDocument(doc: DxfParser.DXFDocument, dimensionBlocks: { blockName: string; entities: DxfParser.Entity[]; layer: string; dimensionData?: any; }[]) {
 
         const dxf: (string | number)[] = [];
         function append(...values: (string | number)[]) {
@@ -643,6 +718,75 @@ namespace MakerJs.exporter {
             );
         }
 
+        map["DIMENSION"] = function (dim: DxfParser.EntityDIMENSION) {
+            append(
+                "0", "DIMENSION",
+                "100", "AcDbEntity",
+                "8", dim.layer || "DIMENSION",
+                "100", "AcDbDimension",
+                "2", dim.block || (dim as any).blockName || "*D0",
+                "10", dim.anchorPoint ? dim.anchorPoint.x : 0,
+                "20", dim.anchorPoint ? dim.anchorPoint.y : 0,
+                "30", dim.anchorPoint ? (dim.anchorPoint.z || 0) : 0
+            );
+
+            if (dim.middleOfText) {
+                append("11", dim.middleOfText.x, "21", dim.middleOfText.y, "31", dim.middleOfText.z || 0);
+            }
+
+            append("70", dim.dimensionType === undefined ? 32 : dim.dimensionType);
+
+            if (dim.text !== undefined) {
+                append("1", dim.text);
+            }
+
+            append(
+                "71", dim.attachmentPoint || 5,
+                "3", (dim as any).styleName || "STANDARD"
+            );
+
+            if (dim.actualMeasurement !== undefined) {
+                append("42", dim.actualMeasurement);
+            }
+
+            if ((dim as any).textHeight !== undefined) {
+                append("140", (dim as any).textHeight);
+            }
+
+            append("210", 0, "220", 0, "230", 1);
+
+            if (dim.dimensionType === 34) {
+                append("100", "AcDb2LineAngularDimension");
+            } else if (dim.dimensionType === 35) {
+                append("100", "AcDbDiametricDimension");
+            } else if (dim.dimensionType === 36) {
+                append("100", "AcDbRadialDimension");
+            } else {
+                append("100", "AcDbAlignedDimension");
+            }
+
+            if (dim.linearOrAngularPoint1) {
+                append("13", dim.linearOrAngularPoint1.x, "23", dim.linearOrAngularPoint1.y, "33", dim.linearOrAngularPoint1.z || 0);
+            }
+
+            if (dim.linearOrAngularPoint2) {
+                append("14", dim.linearOrAngularPoint2.x, "24", dim.linearOrAngularPoint2.y, "34", dim.linearOrAngularPoint2.z || 0);
+            }
+
+            if (dim.diameterOrRadiusPoint) {
+                append("15", dim.diameterOrRadiusPoint.x, "25", dim.diameterOrRadiusPoint.y, "35", dim.diameterOrRadiusPoint.z || 0);
+            }
+
+            if (dim.arcPoint) {
+                append("15", dim.arcPoint.x, "25", dim.arcPoint.y, "35", dim.arcPoint.z || 0);
+            }
+
+            if (dim.dimensionType === 32 || dim.dimensionType === 160) {
+                append("100", "AcDbRotatedDimension");
+                append("50", dim.angle || 0);
+            }
+        }
+
         map["INSERT"] = function (insert: any) {
             append(
                 "0", "INSERT",
@@ -673,6 +817,10 @@ namespace MakerJs.exporter {
             table(lineTypesOut);
             table(layersOut);
             table(stylesOut); // ✅ add
+            if (dimensionBlocks.some(block => block.dimensionData)) {
+                table(blockRecordsOut);
+                table(dimStylesOut);
+            }
         }
 
         function layerOut(layer: DxfParser.Layer) {
@@ -757,6 +905,31 @@ namespace MakerJs.exporter {
             }
         }
 
+        function blockRecordsOut() {
+            append("2", "BLOCK_RECORD", "70", dimensionBlocks.length + 2);
+            append("0", "BLOCK_RECORD", "2", "*Model_Space", "70", 0);
+            append("0", "BLOCK_RECORD", "2", "*Paper_Space", "70", 0);
+
+            dimensionBlocks.forEach(block => {
+                append("0", "BLOCK_RECORD", "2", block.blockName, "70", 0);
+            });
+        }
+
+        function dimStylesOut() {
+            append(
+                "2", "DIMSTYLE",
+                "70", 1,
+                "0", "DIMSTYLE",
+                "2", "STANDARD",
+                "70", 0,
+                "40", 1,
+                "41", 2.5,
+                "42", 0.625,
+                "44", 1.25,
+                "140", 2.5
+            );
+        }
+
         // ✅ Header writer that supports strings and integers
         function header() {
             append("2", "HEADER");
@@ -794,7 +967,7 @@ namespace MakerJs.exporter {
                     "0", "BLOCK",
                     "8", block.layer || "0",
                     "2", block.blockName,
-                    "70", "0",
+                    "70", block.dimensionData ? "1" : "0",
                     "10", 0,
                     "20", 0,
                     "3", block.blockName,
