@@ -10,6 +10,18 @@ lineSolid.layer = "0";
 const circleDotted = new makerjs.paths.Circle([50, 20], 20);
 circleDotted.layer = "1";
 
+const lineCenter = new makerjs.paths.Line([0, 30], [100, 30]);
+lineCenter.layer = "CENTER";
+
+const lineHidden = new makerjs.paths.Line([0, 40], [100, 40]);
+lineHidden.layer = "HIDDEN";
+
+const linePhantom = new makerjs.paths.Line([0, 50], [100, 50]);
+linePhantom.layer = "PHANTOM";
+
+const lineCustom = new makerjs.paths.Line([0, 60], [100, 60]);
+lineCustom.layer = "CUSTOM";
+
 const rect = new makerjs.models.Rectangle(50, 30);
 rect.origin = [120, 0];
 
@@ -19,7 +31,10 @@ rect.origin = [120, 0];
 // const JapaneseText = new makerjs.models.Text("日本語テスト- 한국어 키보드 JP", 10, "JP");
 // JapaneseText.layer = "TEXT";
 
-const model = { paths: { lineDashed, lineSolid, circleDotted }, models: { rect } };
+const model = {
+  paths: { lineDashed, lineSolid, circleDotted, lineCenter, lineHidden, linePhantom, lineCustom },
+  models: { rect },
+};
 
 if (makerjs.dimension && typeof makerjs.dimension.addHorizontal === "function") {
   makerjs.dimension.addHorizontal(model, [0, 0], [100, 0], -10, {
@@ -68,8 +83,19 @@ const dxf = makerjs.exporter.toDXF(model, {
     DASH: { color: 1, lineType: "DASHED" },
     "0": { color: 7, lineType: "CONTINUOUS" },
     "1": { color: 1, lineType: "DOTTED" },
+    CENTER: { color: 4, lineType: "CENTER2" },
+    HIDDEN: { color: 8, lineType: "HIDDEN2" },
+    PHANTOM: { color: 6, lineType: "PHANTOM" },
+    CUSTOM: { color: 5, lineType: "CUSTOMDASH" },
     DIMENSION: { color: 7, lineType: "CONTINUOUS", fontSize: 4 },
     TEXT: { color: 3, lineType: "CONTINUOUS", fontSize: 5 },
+  },
+  lineTypes: {
+    CUSTOMDASH: {
+      description: "custom dash",
+      patternLength: 6,
+      elements: [3, -3],
+    },
   },
 
   // force TEXT entities
@@ -85,3 +111,4 @@ const dxf = makerjs.exporter.toDXF(model, {
 fs.writeFileSync("out.dxf", dxf, "utf8");
 console.log("Wrote out.dxf");
 console.log("Dimension test cases: horizontal, radial, diameter, rectangle width, rectangle height, label");
+console.log("Line type test cases: DASHED, DOTTED, CENTER2, HIDDEN2, PHANTOM, CUSTOMDASH");
