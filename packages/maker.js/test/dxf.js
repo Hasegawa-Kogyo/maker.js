@@ -126,4 +126,22 @@ describe('Export DXF', function() {
         assert.ok(dimensionEntity.includes(['70', '32'].join('\n')));
         assert.equal(dimensionEntity.includes(['11', '-30', '21', '300'].join('\n')), false);
     });
+
+    it('should not write loose geometry into native dimension blocks', function() {
+        var model = { paths: { measured: new makerjs.paths.Line([0, 0], [0, 600]) } };
+        makerjs.dimension.addVertical(model, [0, 0], [0, 600], 30, {
+            layer: 'DIMENSION',
+            text: '600',
+            textHeight: 20,
+            key: 'dim'
+        });
+
+        var dxf = makerjs.exporter.toDXF(model, exportOptions);
+        var blockStart = dxf.indexOf(['0', 'BLOCK'].join('\n'));
+        var blockEnd = dxf.indexOf(['0', 'ENDBLK'].join('\n'), blockStart);
+        var block = dxf.substring(blockStart, blockEnd);
+
+        assert.equal(block.includes(['0', 'LINE'].join('\n')), false);
+        assert.equal(block.includes(['0', 'TEXT'].join('\n')), false);
+    });
 });

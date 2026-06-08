@@ -5881,6 +5881,9 @@ var MakerJs;
                     if (fn) {
                         var dimensionOwner = getDimensionOwner(walkedPath.routeKey);
                         if (dimensionOwner) {
+                            if (dimensionOwner.dimensionData) {
+                                return;
+                            }
                             var localOffset = dimensionOwner.dimensionData ? walkedPath.offset : MakerJs.point.subtract(walkedPath.offset, dimensionOwner.insertOffset);
                             var entity = fn(walkedPath.pathContext, localOffset, walkedPath.layer);
                             dimensionOwner.entities.push(entity);
@@ -5894,6 +5897,9 @@ var MakerJs;
                 captions.forEach(function (caption) {
                     var dimensionOwner = getDimensionOwner(caption.routeKey);
                     if (dimensionOwner) {
+                        if (dimensionOwner.dimensionData) {
+                            return;
+                        }
                         var captionOrigin = dimensionOwner.dimensionData ? caption.anchor.origin : MakerJs.point.subtract(caption.anchor.origin, dimensionOwner.insertOffset);
                         var captionEnd = dimensionOwner.dimensionData ? caption.anchor.end : MakerJs.point.subtract(caption.anchor.end, dimensionOwner.insertOffset);
                         var localCaption = {
