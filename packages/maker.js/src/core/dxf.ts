@@ -54,6 +54,41 @@ namespace MakerJs.exporter {
             }
         }
 
+        function createDxfModelContext(modelContext: IModel): IModel {
+            const modelAsAny = modelContext as any;
+            const source = (modelAsAny.dxfModel || modelContext) as IModel;
+            const result: any = {};
+
+            for (const key in source) {
+                if (key !== 'models') {
+                    result[key] = (source as any)[key];
+                }
+            }
+
+            if (modelAsAny.dxfModel) {
+                if (modelContext.origin !== undefined) {
+                    result.origin = modelContext.origin;
+                }
+                if (modelContext.layer !== undefined) {
+                    result.layer = modelContext.layer;
+                }
+            }
+
+            if (source.models) {
+                result.models = {};
+                for (const modelId in source.models) {
+                    const childModel = source.models[modelId];
+                    result.models[modelId] = childModel ? createDxfModelContext(childModel) : childModel;
+                }
+            }
+
+            return result as IModel;
+        }
+
+        if (isModel(modelToExport)) {
+            modelToExport = createDxfModelContext(modelToExport);
+        }
+
         // -------------------------
         // ✅ Unicode / Japanese text support
         // Encode non-ASCII as AutoCAD-style \U+XXXX
