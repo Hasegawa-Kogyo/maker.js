@@ -11389,6 +11389,14 @@ var MakerJs;
         function defaultText(distance) {
             return MakerJs.round(distance, .001).toString();
         }
+        function dotProduct(a, b) {
+            return a[0] * b[0] + a[1] * b[1];
+        }
+        function addLinePath(pathsMap, id, origin, end, layer) {
+            if (MakerJs.measure.pointDistance(origin, end) > .000001) {
+                pathsMap[id] = asLayer(new MakerJs.paths.Line(origin, end), layer);
+            }
+        }
         function resolveDimensionTextOptions(options, defaultTextPosition, defaultTextRotation) {
             return {
                 textPosition: options.textPosition ? MakerJs.point.clone(options.textPosition) : MakerJs.point.clone(defaultTextPosition),
@@ -11488,12 +11496,33 @@ var MakerJs;
                 var defaultTextPosition = MakerJs.point.average(dimStart, dimEnd);
                 var textWidth = Math.max(measuredValue * 0.2, textHeight * 2);
                 var captionText = options.text || defaultText(measuredValue);
-                var addRenderGeometry = function (target, resolvedText) {
+                var addRenderGeometry = function (target, resolvedText, splitDimensionLine) {
                     target.paths = target.paths || {};
                     target.models = target.models || {};
                     target.paths.extensionLine1 = asLayer(new MakerJs.paths.Line(point1, ext1End), layer);
                     target.paths.extensionLine2 = asLayer(new MakerJs.paths.Line(point2, ext2End), layer);
-                    target.paths.dimensionLine = asLayer(new MakerJs.paths.Line(dimStart, dimEnd), layer);
+                    if (splitDimensionLine) {
+                        var dimensionAxis = polar(baseAngle, 1);
+                        var textFromStart = MakerJs.point.subtract(resolvedText.textPosition, dimStart);
+                        var textAlongDimension = dotProduct(textFromStart, dimensionAxis);
+                        var textDistanceFromDimension = Math.abs(textFromStart[0] * dimensionAxis[1] - textFromStart[1] * dimensionAxis[0]);
+                        var shouldBreakDimensionLine = textAlongDimension > 0
+                            && textAlongDimension < measuredValue
+                            && textDistanceFromDimension <= textHeight * 1.25;
+                        if (shouldBreakDimensionLine) {
+                            var gapHalfWidth = textWidth / 2 + textHeight * .6;
+                            var gapStart = Math.max(0, textAlongDimension - gapHalfWidth);
+                            var gapEnd = Math.min(measuredValue, textAlongDimension + gapHalfWidth);
+                            addLinePath(target.paths, 'dimensionLine1', dimStart, MakerJs.point.add(dimStart, polar(baseAngle, gapStart)), layer);
+                            addLinePath(target.paths, 'dimensionLine2', MakerJs.point.add(dimStart, polar(baseAngle, gapEnd)), dimEnd, layer);
+                        }
+                        else {
+                            target.paths.dimensionLine = asLayer(new MakerJs.paths.Line(dimStart, dimEnd), layer);
+                        }
+                    }
+                    else {
+                        target.paths.dimensionLine = asLayer(new MakerJs.paths.Line(dimStart, dimEnd), layer);
+                    }
                     target.models.arrow1 = createArrow(dimStart, arrow1Angle, arrowSize);
                     target.models.arrow2 = createArrow(dimEnd, arrow2Angle, arrowSize);
                     target.models.arrow1.layer = layer;
@@ -11509,7 +11538,7 @@ var MakerJs;
                 };
                 var resolvedText = resolveDimensionTextOptions(options, defaultTextPosition, baseAngle);
                 var dxfResolvedText = resolveDimensionTextOptions({ textRotation: options.textRotation }, defaultTextPosition, baseAngle);
-                addRenderGeometry(this, resolvedText);
+                addRenderGeometry(this, resolvedText, false);
                 this.layer = layer;
                 this.dimensionData = {
                     type: 'linear',
@@ -11524,7 +11553,7 @@ var MakerJs;
                     textRotation: resolvedText.textRotation
                 };
                 this.dxfModel = {};
-                addRenderGeometry(this.dxfModel, dxfResolvedText);
+                addRenderGeometry(this.dxfModel, dxfResolvedText, true);
                 this.dxfModel.dimensionData = {
                     type: 'linear',
                     layer: layer,

@@ -127,4 +127,23 @@ describe('Export DXF', function() {
         assert.equal(dimensionEntity.includes(['11', '-30', '21', '300'].join('\n')), false);
     });
 
+    it('should split DXF block dimension lines around default text', function() {
+        var model = { paths: { measured: new makerjs.paths.Line([0, 0], [100, 0]) } };
+        makerjs.dimension.addHorizontal(model, [0, 0], [100, 0], -10, {
+            layer: 'DIMENSION',
+            text: '100',
+            textHeight: 4,
+            key: 'dim'
+        });
+
+        var dxf = makerjs.exporter.toDXF(model, exportOptions);
+        var blockStart = dxf.indexOf(['0', 'BLOCK'].join('\n'));
+        var blockEnd = dxf.indexOf(['0', 'ENDBLK'].join('\n'), blockStart);
+        var block = dxf.substring(blockStart, blockEnd);
+
+        assert.equal(block.includes(['10', '0', '20', '-10', '11', '100', '21', '-10'].join('\n')), false);
+        assert.ok(block.includes(['10', '0', '20', '-10', '11', '37.6', '21', '-10'].join('\n')));
+        assert.ok(block.includes(['10', '62.4', '20', '-10', '11', '100', '21', '-10'].join('\n')));
+    });
+
 });
