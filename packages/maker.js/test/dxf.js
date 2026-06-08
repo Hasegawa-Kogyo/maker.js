@@ -108,4 +108,22 @@ describe('Export DXF', function() {
             makerjs.exporter.toDXF(normalModel, exportOptions)
         );
     });
+
+    it('should not mark linear dimension text as manually positioned', function() {
+        var model = { paths: { measured: new makerjs.paths.Line([0, 0], [0, 600]) } };
+        makerjs.dimension.addVertical(model, [0, 0], [0, 600], 30, {
+            layer: 'DIMENSION',
+            text: '600',
+            textHeight: 20,
+            key: 'dim'
+        });
+
+        var dxf = makerjs.exporter.toDXF(model, exportOptions);
+        var dimensionStart = dxf.indexOf(['0', 'DIMENSION'].join('\n'));
+        var dimensionEnd = dxf.indexOf(['0', 'ENDSEC'].join('\n'), dimensionStart);
+        var dimensionEntity = dxf.substring(dimensionStart, dimensionEnd);
+
+        assert.ok(dimensionEntity.includes(['70', '32'].join('\n')));
+        assert.equal(dimensionEntity.includes(['11', '-30', '21', '300'].join('\n')), false);
+    });
 });

@@ -188,11 +188,10 @@ namespace MakerJs.exporter {
                 );
 
                 dim.anchorPoint = dxfVertex(dimensionPoint, offset);
-                dim.middleOfText = dxfVertex(linearData.textPosition || defaultTextPosition, offset);
                 dim.linearOrAngularPoint1 = dxfVertex(linearData.point1, offset);
                 dim.linearOrAngularPoint2 = dxfVertex(linearData.point2, offset);
                 dim.angle = round(dimensionAngle, opts.accuracy);
-                dim.dimensionType = 160;
+                dim.dimensionType = 32;
                 return dim;
             }
 
