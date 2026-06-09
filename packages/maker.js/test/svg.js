@@ -111,4 +111,22 @@ describe('Export SVG', function () {
         assert.ok(svg.indexOf('id="captions"') > 0, 'should have captions group');
         assert.ok(svg.indexOf('fold here') > 0, 'should have caption text');
     });
+
+    it('should keep a complete dimension line under dimension text', function () {
+        var model = {};
+        makerjs.dimension.addHorizontal(model, [0, 0], [100, 0], -10, {
+            layer: 'DIMENSION',
+            text: '100',
+            textHeight: 4,
+            key: 'dim'
+        });
+
+        assert.ok(model.models.dim.paths.dimensionLine);
+        assert.equal(model.models.dim.paths.dimensionLine.origin[0], 0);
+        assert.equal(model.models.dim.paths.dimensionLine.origin[1], -10);
+        assert.equal(model.models.dim.paths.dimensionLine.end[0], 100);
+        assert.equal(model.models.dim.paths.dimensionLine.end[1], -10);
+        assert.equal(model.models.dim.paths.dimensionLine1, undefined);
+        assert.equal(model.models.dim.paths.dimensionLine2, undefined);
+    });
 });
