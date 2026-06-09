@@ -1,0 +1,6 @@
+examples/*
+debug/*
+src/*
+test/*
+tsconfig.json
+package-lock.json
