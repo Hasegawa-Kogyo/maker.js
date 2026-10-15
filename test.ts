@@ -67,6 +67,37 @@ if (makerjs.dimension && typeof makerjs.dimension.addHorizontal === "function") 
     key: "rectHeight",
   });
 
+  const outsideArrowDimension = makerjs.dimension.addHorizontal(model, [0, 70], [27, 70], 10, {
+    layer: "DIMENSION",
+    text: "OUTSIDE ARROWS",
+    textHeight: 4,
+    arrowSize: 5,
+    arrowPlacement: "outside",
+    textPosition: [-20, 80],
+    key: "outsideArrows",
+  });
+  const outsideLeftArrow = outsideArrowDimension.models.arrow1.paths.l1;
+  const outsideRightArrow = outsideArrowDimension.models.arrow2.paths.l1;
+
+  if (
+    outsideLeftArrow.end[0] >= outsideLeftArrow.origin[0]
+    || outsideRightArrow.end[0] <= outsideRightArrow.origin[0]
+  ) {
+    throw new Error("Outside dimension arrows were not generated correctly");
+  }
+
+  for (const outsideModel of [outsideArrowDimension, outsideArrowDimension.dxfModel]) {
+    const dimensionLine = outsideModel.paths.dimensionLine;
+    if (!dimensionLine || dimensionLine.origin[0] >= 0 || dimensionLine.end[0] <= 27) {
+      throw new Error("Outside dimension line was not extended beyond both arrows");
+    }
+  }
+
+  const outsideDxfTextPosition = outsideArrowDimension.dxfModel.dimensionData.dxfTextPosition;
+  if (outsideDxfTextPosition[0] !== -20 || outsideDxfTextPosition[1] !== 80) {
+    throw new Error("Outside dimension text position was not preserved for DXF");
+  }
+
   makerjs.dimension.labels(model, "50 x 30 RECT", [170, 30], [190, 45], {
     layer: "DIMENSION",
     textHeight: 4,
@@ -108,7 +139,11 @@ const dxf = makerjs.exporter.toDXF(model, {
   // textStyleName: "JP",
 });
 
+if (!/\r?\n70\r?\n160\r?\n/.test(dxf)) {
+  throw new Error("DXF outside dimension text was not marked as user-positioned");
+}
+
 fs.writeFileSync("out.dxf", dxf, "utf8");
 console.log("Wrote out.dxf");
-console.log("Dimension test cases: horizontal, radial, diameter, rectangle width, rectangle height, label");
+console.log("Dimension test cases: horizontal, radial, diameter, rectangle width, rectangle height, outside arrows, label");
 console.log("Line type test cases: DASHED, DOTTED, CENTER2, HIDDEN2, PHANTOM, CUSTOMDASH");
