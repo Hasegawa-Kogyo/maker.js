@@ -284,9 +284,13 @@ namespace MakerJs.exporter {
             if (data.type === 'angular') {
                 const angularData = data as any;
                 const angle1 = angle.ofPointInDegrees(angularData.centerPoint, angularData.point1);
-                const arcPoint = point.add(angularData.centerPoint, point.fromPolar(angle.toRadians(angle1), angularData.radius));
+                // Locate the arc inside the measured sweep, not on either ray.
+                const arcAngle = angle1 + angularData.measuredValue / 2;
+                const arcPoint = point.add(angularData.centerPoint, point.fromPolar(angle.toRadians(arcAngle), angularData.radius));
 
-                dim.dimensionType = 34;
+                // Three-point angular (5) plus anonymous dimension block (32).
+                // The model stores two ray points and their shared vertex.
+                dim.dimensionType = 37;
                 dim.anchorPoint = dxfVertex(arcPoint, offset);
                 dim.middleOfText = dxfVertex(angularData.textPosition || arcPoint, offset);
                 dim.linearOrAngularPoint1 = dxfVertex(angularData.point1, offset);
@@ -861,8 +865,8 @@ namespace MakerJs.exporter {
 
             append("210", 0, "220", 0, "230", 1);
 
-            if (dim.dimensionType === 34) {
-                append("100", "AcDb2LineAngularDimension");
+            if (dim.dimensionType === 37) {
+                append("100", "AcDb3PointAngularDimension");
             } else if (dim.dimensionType === 35) {
                 append("100", "AcDbDiametricDimension");
             } else if (dim.dimensionType === 36) {

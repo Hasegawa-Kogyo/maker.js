@@ -2,5 +2,6 @@ examples/*
 debug/*
 src/*
 test/*
+!test/angular-dimension.js
 tsconfig.json
 package-lock.json
