@@ -5468,6 +5468,74 @@ var MakerJs;
 (function (MakerJs) {
     var exporter;
     (function (exporter) {
+        var defaultDXFLineTypes = {
+            CONTINUOUS: { description: '______', patternLength: 0, elements: [] },
+            DASHED: { description: '_ _ _ ', patternLength: 7.5, elements: [5, -2.5] },
+            DOTTED: { description: '. . . ', patternLength: 1.5, elements: [0.5, -1.0] },
+            CENTER: { description: '____ _ ____ _ ', patternLength: 31.75, elements: [12.7, -2.54, 2.54, -2.54] },
+            CENTER2: { description: '__ _ __ _ ', patternLength: 15.875, elements: [6.35, -1.27, 1.27, -1.27] },
+            CENTERX2: { description: '________ _ ________ _ ', patternLength: 63.5, elements: [25.4, -5.08, 5.08, -5.08] },
+            PHANTOM: { description: '____ _ _ ____ _ _ ', patternLength: 38.1, elements: [12.7, -2.54, 2.54, -2.54, 2.54, -2.54] },
+            PHANTOM2: { description: '__ _ _ __ _ _ ', patternLength: 19.05, elements: [6.35, -1.27, 1.27, -1.27, 1.27, -1.27] },
+            PHANTOMX2: { description: '________ _ _ ________ _ _ ', patternLength: 76.2, elements: [25.4, -5.08, 5.08, -5.08, 5.08, -5.08] },
+            HIDDEN: { description: '_ _ _ _ _ ', patternLength: 9.525, elements: [3.175, -1.5875] },
+            HIDDEN2: { description: '_ _ _ _ ', patternLength: 4.7625, elements: [1.5875, -0.79375] },
+            HIDDENX2: { description: '__ __ __ __ ', patternLength: 19.05, elements: [6.35, -3.175] },
+            DASHDOT: { description: '____ . ____ . ', patternLength: 19.05, elements: [9.525, -3.175, 0, -3.175] },
+            DASHDOT2: { description: '__ . __ . ', patternLength: 9.525, elements: [4.7625, -1.5875, 0, -1.5875] },
+            DASHDOTX2: { description: '________ . ________ . ', patternLength: 38.1, elements: [19.05, -6.35, 0, -6.35] },
+            BORDER: { description: '____ _ ____ _ ____ _ ', patternLength: 45.72, elements: [12.7, -2.54, 12.7, -2.54, 2.54, -2.54] },
+            BORDER2: { description: '__ _ __ _ __ _ ', patternLength: 22.86, elements: [6.35, -1.27, 6.35, -1.27, 1.27, -1.27] },
+            BORDERX2: { description: '________ _ ________ _ ________ _ ', patternLength: 91.44, elements: [25.4, -5.08, 25.4, -5.08, 5.08, -5.08] },
+            DIVIDE: { description: '____ . . ____ . . ', patternLength: 25.4, elements: [12.7, -2.54, 0, -2.54, 0, -2.54] },
+            DIVIDE2: { description: '__ . . __ . . ', patternLength: 12.7, elements: [6.35, -1.27, 0, -1.27, 0, -1.27] },
+            DIVIDEX2: { description: '________ . . ________ . . ', patternLength: 50.8, elements: [25.4, -5.08, 0, -5.08, 0, -5.08] }
+        };
+        function cloneDXFLineType(lineType) {
+            return {
+                description: lineType.description,
+                patternLength: lineType.patternLength,
+                elements: lineType.elements ? lineType.elements.slice(0) : []
+            };
+        }
+        function copyDXFLineTypes(source) {
+            var copy = {};
+            for (var lineTypeName in source) {
+                copy[lineTypeName] = cloneDXFLineType(source[lineTypeName]);
+            }
+            return copy;
+        }
+        function normalizeDXFLineTypeName(lineTypeName) {
+            return (lineTypeName || '').toUpperCase();
+        }
+        function validateDXFLineType(lineTypeName, lineType) {
+            if (!lineType) {
+                throw new Error('DXF lineType "' + lineTypeName + '" is not defined.');
+            }
+            if (typeof lineType.description !== 'string') {
+                throw new Error('DXF lineType "' + lineTypeName + '" must have a description.');
+            }
+            if (!Array.isArray(lineType.elements)) {
+                throw new Error('DXF lineType "' + lineTypeName + '" must define elements as an array.');
+            }
+            var computedPatternLength = MakerJs.round(lineType.elements.reduce(function (total, element) { return total + Math.abs(element); }, 0), .000001);
+            var patternLength = lineType.patternLength === undefined ? computedPatternLength : lineType.patternLength;
+            if (Math.abs(patternLength - computedPatternLength) > .000001) {
+                throw new Error('DXF lineType "' + lineTypeName + '" has patternLength ' + patternLength + ' but elements sum to ' + computedPatternLength + '.');
+            }
+        }
+        function getDXFLineTypes(options) {
+            var lineTypes = copyDXFLineTypes(defaultDXFLineTypes);
+            if (options && options.lineTypes) {
+                for (var lineTypeName in options.lineTypes) {
+                    var normalizedName = normalizeDXFLineTypeName(lineTypeName);
+                    var lineType = options.lineTypes[lineTypeName];
+                    validateDXFLineType(normalizedName, lineType);
+                    lineTypes[normalizedName] = cloneDXFLineType(lineType);
+                }
+            }
+            return lineTypes;
+        }
         /**
          * Renders an item in AutoDesk DFX file format.
          *
@@ -5497,6 +5565,7 @@ var MakerJs;
                     MakerJs.extendObject(opts, modelToExport.exporterOptions['toDXF']);
                 }
             }
+            var resolvedLineTypes = getDXFLineTypes(opts);
             function createDxfModelContext(modelContext) {
                 var modelAsAny = modelContext;
                 var source = (modelAsAny.dxfModel || modelContext);
@@ -5576,7 +5645,11 @@ var MakerJs;
             }
             function lineTypeLayerOptions(layer) {
                 if (opts.layerOptions && opts.layerOptions[layer] && opts.layerOptions[layer].lineType) {
-                    return opts.layerOptions[layer].lineType;
+                    var normalizedName = normalizeDXFLineTypeName(opts.layerOptions[layer].lineType);
+                    if (!(normalizedName in resolvedLineTypes)) {
+                        throw new Error('DXF lineType "' + opts.layerOptions[layer].lineType + '" is not defined.');
+                    }
+                    return normalizedName;
                 }
                 return "CONTINUOUS";
             }
@@ -5622,15 +5695,23 @@ var MakerJs;
                     dim.anchorPoint = dxfVertex(dimensionPoint, offset);
                     dim.linearOrAngularPoint1 = dxfVertex(linearData.point1, offset);
                     dim.linearOrAngularPoint2 = dxfVertex(linearData.point2, offset);
+                    if (linearData.dxfTextPosition) {
+                        dim.middleOfText = dxfVertex(linearData.dxfTextPosition, offset);
+                    }
                     dim.angle = MakerJs.round(dimensionAngle, opts.accuracy);
-                    dim.dimensionType = 32;
+                    // DXF bit 128 marks dimension text as user-positioned.
+                    dim.dimensionType = linearData.dxfTextPosition ? 160 : 32;
                     return dim;
                 }
                 if (data.type === 'angular') {
                     var angularData = data;
                     var angle1 = MakerJs.angle.ofPointInDegrees(angularData.centerPoint, angularData.point1);
-                    var arcPoint = MakerJs.point.add(angularData.centerPoint, MakerJs.point.fromPolar(MakerJs.angle.toRadians(angle1), angularData.radius));
-                    dim.dimensionType = 34;
+                    // Locate the arc inside the measured sweep, not on either ray.
+                    var arcAngle = angle1 + angularData.measuredValue / 2;
+                    var arcPoint = MakerJs.point.add(angularData.centerPoint, MakerJs.point.fromPolar(MakerJs.angle.toRadians(arcAngle), angularData.radius));
+                    // Three-point angular (5) plus anonymous dimension block (32).
+                    // The model stores two ray points and their shared vertex.
+                    dim.dimensionType = 37;
                     dim.anchorPoint = dxfVertex(arcPoint, offset);
                     dim.middleOfText = dxfVertex(angularData.textPosition || arcPoint, offset);
                     dim.linearOrAngularPoint1 = dxfVertex(angularData.point1, offset);
@@ -5811,30 +5892,18 @@ var MakerJs;
                 return layerEntity;
             }
             function lineTypesOut() {
-                // Dash pattern convention: positive = drawn segment, negative = gap, 0 can be dot.
-                // patternLength is sum of absolute values.
                 var lineStyleTable = {
-                    lineTypes: {
-                        "CONTINUOUS": {
-                            name: "CONTINUOUS",
-                            description: "______",
-                            patternLength: 0,
-                            elements: []
-                        },
-                        "DASHED": {
-                            name: "DASHED",
-                            description: "_ _ _ ",
-                            elements: [5, -2.5],
-                            patternLength: 7.5
-                        },
-                        "DOTTED": {
-                            name: "DOTTED",
-                            description: ". . . ",
-                            elements: [0.5, -1.0],
-                            patternLength: 1.5
-                        }
-                    }
+                    lineTypes: {}
                 };
+                for (var lineTypeName in resolvedLineTypes) {
+                    var lineType = resolvedLineTypes[lineTypeName];
+                    lineStyleTable.lineTypes[lineTypeName] = {
+                        name: lineTypeName,
+                        description: lineType.description,
+                        patternLength: lineType.patternLength,
+                        elements: lineType.elements.slice(0)
+                    };
+                }
                 var tableName = 'lineType';
                 doc.tables[tableName] = lineStyleTable;
             }
@@ -6064,8 +6133,8 @@ var MakerJs;
                     append("140", dim.textHeight);
                 }
                 append("210", 0, "220", 0, "230", 1);
-                if (dim.dimensionType === 34) {
-                    append("100", "AcDb2LineAngularDimension");
+                if (dim.dimensionType === 37) {
+                    append("100", "AcDb3PointAngularDimension");
                 }
                 else if (dim.dimensionType === 35) {
                     append("100", "AcDbDiametricDimension");
@@ -11491,20 +11560,34 @@ var MakerJs;
                 var ext1End = MakerJs.point.add(point1, polar(perpAngle, extensionLength));
                 var ext2End = MakerJs.point.add(point2, polar(perpAngle, extensionLength));
                 var dimMid = MakerJs.point.average(dimStart, dimEnd);
-                var arrow1Angle = MakerJs.angle.ofPointInDegrees(dimStart, dimMid);
-                var arrow2Angle = MakerJs.angle.ofPointInDegrees(dimEnd, dimMid);
+                var arrowDirectionOffset = options.arrowPlacement === 'outside' ? 180 : 0;
+                var arrow1Angle = MakerJs.angle.ofPointInDegrees(dimStart, dimMid) + arrowDirectionOffset;
+                var arrow2Angle = MakerJs.angle.ofPointInDegrees(dimEnd, dimMid) + arrowDirectionOffset;
                 var defaultTextPosition = MakerJs.point.average(dimStart, dimEnd);
-                var textWidth = Math.max(measuredValue * 0.2, textHeight * 2);
                 var captionText = options.text || defaultText(measuredValue);
+                var textWidth = options.arrowPlacement === 'outside'
+                    ? Math.max(measuredValue * 0.2, textHeight * 2, captionText.length * textHeight * .7)
+                    : Math.max(measuredValue * 0.2, textHeight * 2);
+                var dimensionAxis = polar(baseAngle, 1);
                 var addRenderGeometry = function (target, resolvedText, splitDimensionLine) {
                     target.paths = target.paths || {};
                     target.models = target.models || {};
                     target.paths.extensionLine1 = asLayer(new MakerJs.paths.Line(point1, ext1End), layer);
                     target.paths.extensionLine2 = asLayer(new MakerJs.paths.Line(point2, ext2End), layer);
+                    var textFromStart = MakerJs.point.subtract(resolvedText.textPosition, dimStart);
+                    var textAlongDimension = dotProduct(textFromStart, dimensionAxis);
+                    var textStartDistance = textAlongDimension - textWidth / 2;
+                    var textEndDistance = textAlongDimension + textWidth / 2;
+                    var shelfPadding = textHeight * 2;
+                    var lineStartDistance = options.arrowPlacement === 'outside'
+                        ? Math.min(-arrowSize, textStartDistance - (textStartDistance < 0 ? shelfPadding : arrowSize))
+                        : 0;
+                    var lineEndDistance = options.arrowPlacement === 'outside'
+                        ? Math.max(measuredValue + arrowSize, textEndDistance + (textEndDistance > measuredValue ? shelfPadding : arrowSize))
+                        : measuredValue;
+                    var dimensionLineStart = MakerJs.point.add(dimStart, polar(baseAngle, lineStartDistance));
+                    var dimensionLineEnd = MakerJs.point.add(dimStart, polar(baseAngle, lineEndDistance));
                     if (splitDimensionLine) {
-                        var dimensionAxis = polar(baseAngle, 1);
-                        var textFromStart = MakerJs.point.subtract(resolvedText.textPosition, dimStart);
-                        var textAlongDimension = dotProduct(textFromStart, dimensionAxis);
                         var textDistanceFromDimension = Math.abs(textFromStart[0] * dimensionAxis[1] - textFromStart[1] * dimensionAxis[0]);
                         var shouldBreakDimensionLine = textAlongDimension > 0
                             && textAlongDimension < measuredValue
@@ -11513,15 +11596,15 @@ var MakerJs;
                             var gapHalfWidth = textWidth / 2 + textHeight * .6;
                             var gapStart = Math.max(0, textAlongDimension - gapHalfWidth);
                             var gapEnd = Math.min(measuredValue, textAlongDimension + gapHalfWidth);
-                            addLinePath(target.paths, 'dimensionLine1', dimStart, MakerJs.point.add(dimStart, polar(baseAngle, gapStart)), layer);
-                            addLinePath(target.paths, 'dimensionLine2', MakerJs.point.add(dimStart, polar(baseAngle, gapEnd)), dimEnd, layer);
+                            addLinePath(target.paths, 'dimensionLine1', dimensionLineStart, MakerJs.point.add(dimStart, polar(baseAngle, gapStart)), layer);
+                            addLinePath(target.paths, 'dimensionLine2', MakerJs.point.add(dimStart, polar(baseAngle, gapEnd)), dimensionLineEnd, layer);
                         }
                         else {
-                            target.paths.dimensionLine = asLayer(new MakerJs.paths.Line(dimStart, dimEnd), layer);
+                            target.paths.dimensionLine = asLayer(new MakerJs.paths.Line(dimensionLineStart, dimensionLineEnd), layer);
                         }
                     }
                     else {
-                        target.paths.dimensionLine = asLayer(new MakerJs.paths.Line(dimStart, dimEnd), layer);
+                        target.paths.dimensionLine = asLayer(new MakerJs.paths.Line(dimensionLineStart, dimensionLineEnd), layer);
                     }
                     target.models.arrow1 = createArrow(dimStart, arrow1Angle, arrowSize);
                     target.models.arrow2 = createArrow(dimEnd, arrow2Angle, arrowSize);
@@ -11537,7 +11620,11 @@ var MakerJs;
                     target.layer = layer;
                 };
                 var resolvedText = resolveDimensionTextOptions(options, defaultTextPosition, baseAngle);
-                var dxfResolvedText = resolveDimensionTextOptions({ textRotation: options.textRotation }, defaultTextPosition, baseAngle);
+                var useOutsideTextPosition = options.arrowPlacement === 'outside' && !!options.textPosition;
+                var dxfTextOptions = useOutsideTextPosition
+                    ? { textPosition: options.textPosition, textRotation: options.textRotation }
+                    : { textRotation: options.textRotation };
+                var dxfResolvedText = resolveDimensionTextOptions(dxfTextOptions, defaultTextPosition, baseAngle);
                 addRenderGeometry(this, resolvedText, false);
                 this.layer = layer;
                 this.dimensionData = {
@@ -11564,7 +11651,8 @@ var MakerJs;
                     textHeight: options.textHeight,
                     measuredValue: measuredValue,
                     textPosition: dxfResolvedText.textPosition,
-                    textRotation: dxfResolvedText.textRotation
+                    textRotation: dxfResolvedText.textRotation,
+                    dxfTextPosition: useOutsideTextPosition ? dxfResolvedText.textPosition : undefined
                 };
             }
             return LinearDimension;
