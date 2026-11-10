@@ -3,5 +3,6 @@ debug/*
 src/*
 test/*
 !test/angular-dimension.js
+!test/outside-dimension-padding.js
 tsconfig.json
 package-lock.json

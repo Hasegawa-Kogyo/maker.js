@@ -11550,6 +11550,10 @@ var MakerJs;
                 var extensionLineOffset = options.extensionLineOffset === undefined ? 2 : options.extensionLineOffset;
                 var arrowSize = options.arrowSize === undefined ? 2 : options.arrowSize;
                 var textHeight = options.textHeight === undefined ? 2.5 : options.textHeight;
+                if (options.outsideTextPadding !== undefined && (!isFinite(options.outsideTextPadding) || options.outsideTextPadding < 0)) {
+                    throw new RangeError('outsideTextPadding must be a finite, nonnegative number.');
+                }
+                var outsideTextPadding = options.outsideTextPadding === undefined ? textHeight * 0.5 : options.outsideTextPadding;
                 var baseAngle = MakerJs.angle.ofPointInDegrees(point1, point2);
                 var measuredValue = MakerJs.measure.pointDistance(point1, point2);
                 var perpAngle = baseAngle + 90;
@@ -11578,12 +11582,11 @@ var MakerJs;
                     var textAlongDimension = dotProduct(textFromStart, dimensionAxis);
                     var textStartDistance = textAlongDimension - textWidth / 2;
                     var textEndDistance = textAlongDimension + textWidth / 2;
-                    var shelfPadding = textHeight * 2;
                     var lineStartDistance = options.arrowPlacement === 'outside'
-                        ? Math.min(-arrowSize, textStartDistance - (textStartDistance < 0 ? shelfPadding : arrowSize))
+                        ? Math.min(-arrowSize, textStartDistance - (textStartDistance < 0 ? outsideTextPadding : arrowSize))
                         : 0;
                     var lineEndDistance = options.arrowPlacement === 'outside'
-                        ? Math.max(measuredValue + arrowSize, textEndDistance + (textEndDistance > measuredValue ? shelfPadding : arrowSize))
+                        ? Math.max(measuredValue + arrowSize, textEndDistance + (textEndDistance > measuredValue ? outsideTextPadding : arrowSize))
                         : measuredValue;
                     var dimensionLineStart = MakerJs.point.add(dimStart, polar(baseAngle, lineStartDistance));
                     var dimensionLineEnd = MakerJs.point.add(dimStart, polar(baseAngle, lineEndDistance));
