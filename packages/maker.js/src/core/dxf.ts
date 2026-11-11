@@ -134,7 +134,9 @@ namespace MakerJs.exporter {
 
         function createDxfModelContext(modelContext: IModel): IModel {
             const modelAsAny = modelContext as any;
-            const source = (modelAsAny.dxfModel || modelContext) as IModel;
+            const source = dimension.hasExplicitStyle(modelContext)
+                ? dimension.prepareExplicitStyle(modelContext as IDimensionModel)
+                : (modelAsAny.dxfModel || modelContext) as IModel;
             const result: any = {};
 
             for (const key in source) {

@@ -6,3 +6,4 @@ test/*
 !test/outside-dimension-padding.js
 tsconfig.json
 package-lock.json
+!test/dimension-leader-style.js

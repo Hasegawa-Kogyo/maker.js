@@ -3935,6 +3935,45 @@ var MakerJs;
 (function (MakerJs) {
     var dimension;
     (function (dimension) {
+        /** True only for opt-in linear caption leaders or endpoint marker styles. */
+        function hasExplicitStyle(modelContext) {
+            var data = modelContext.dimensionData;
+            return !!data && (data.type === 'linear' || data.type === 'aligned') && !!(data.textLeader || data.endpointMarkers);
+        }
+        dimension.hasExplicitStyle = hasExplicitStyle;
+        function getExplicitTextHeight(modelContext) {
+            if (!hasExplicitStyle(modelContext) || !modelContext.caption)
+                return undefined;
+            var data = modelContext.dimensionData;
+            return data.explicitTextHeightRatio === undefined ? data.textHeight
+                : MakerJs.measure.pathLength(modelContext.caption.anchor) * data.explicitTextHeightRatio;
+        }
+        dimension.getExplicitTextHeight = getExplicitTextHeight;
+        /** Resolve transformed primary geometry for native DXF without mutating the input. */
+        function prepareExplicitStyle(source) {
+            var result = MakerJs.cloneObject(source);
+            delete result.dxfModel;
+            if (!hasExplicitStyle(source))
+                return result;
+            var first = result.paths.extensionLine1;
+            var second = result.paths.extensionLine2;
+            var line = (result.paths.dimensionLine || result.paths.dimensionLine1 || result.paths.dimensionLine2);
+            if (!first || !second || !line || !result.caption)
+                throw new Error('Explicit dimension style requires witness lines and a caption.');
+            var data = result.dimensionData;
+            var rotation = MakerJs.angle.ofLineInDegrees(line);
+            var normal = MakerJs.point.fromPolar(MakerJs.angle.toRadians(rotation + 90), 1);
+            data.point1 = MakerJs.point.clone(first.origin);
+            data.point2 = MakerJs.point.clone(second.origin);
+            data.dimensionAngle = rotation;
+            data.offset = (line.origin[0] - first.origin[0]) * normal[0] + (line.origin[1] - first.origin[1]) * normal[1];
+            data.textPosition = MakerJs.point.average(result.caption.anchor.origin, result.caption.anchor.end);
+            data.dxfTextPosition = MakerJs.point.clone(data.textPosition);
+            data.textRotation = MakerJs.angle.ofLineInDegrees(result.caption.anchor);
+            data.textHeight = getExplicitTextHeight(result);
+            return result;
+        }
+        dimension.prepareExplicitStyle = prepareExplicitStyle;
         function polar(degrees, radius) {
             return MakerJs.point.fromPolar(MakerJs.angle.toRadians(degrees), radius);
         }
@@ -5568,7 +5607,9 @@ var MakerJs;
             var resolvedLineTypes = getDXFLineTypes(opts);
             function createDxfModelContext(modelContext) {
                 var modelAsAny = modelContext;
-                var source = (modelAsAny.dxfModel || modelContext);
+                var source = MakerJs.dimension.hasExplicitStyle(modelContext)
+                    ? MakerJs.dimension.prepareExplicitStyle(modelContext)
+                    : (modelAsAny.dxfModel || modelContext);
                 var result = {};
                 for (var key in source) {
                     if (key !== 'models') {
@@ -11455,6 +11496,22 @@ var MakerJs;
             }
             return pathContext;
         }
+        function endpointMarker(target, key, marker, tip, radius, layer) {
+            if (!marker || marker === 'arrow')
+                return;
+            if (marker !== 'none' && marker !== 'joint')
+                throw new RangeError('Endpoint marker must be arrow, joint or none.');
+            delete target.models[key];
+            if (marker === 'none')
+                return;
+            var jointLayer = layer + '_JOINT';
+            var joint = { layer: jointLayer, paths: {} };
+            for (var i = 0; i < 6; i++) {
+                joint.paths['edge' + i] = asLayer(new MakerJs.paths.Line(MakerJs.point.add(tip, polar(i * 60, radius)), MakerJs.point.add(tip, polar((i + 1) * 60, radius))), jointLayer);
+            }
+            joint.paths.center = asLayer(new MakerJs.paths.Circle(tip, radius * .45), jointLayer);
+            target.models[key === 'arrow1' ? 'joint1' : 'joint2'] = joint;
+        }
         function defaultText(distance) {
             return MakerJs.round(distance, .001).toString();
         }
@@ -11573,6 +11630,37 @@ var MakerJs;
                     ? Math.max(measuredValue * 0.2, textHeight * 2, captionText.length * textHeight * .7)
                     : Math.max(measuredValue * 0.2, textHeight * 2);
                 var dimensionAxis = polar(baseAngle, 1);
+                var markers = options.endpointMarkers;
+                var jointRadius = markers && markers.jointRadius !== undefined ? markers.jointRadius : arrowSize * .5;
+                if (markers && (!isFinite(jointRadius) || jointRadius <= 0))
+                    throw new RangeError('jointRadius must be finite and positive.');
+                var leader = options.textLeader;
+                var leaderElbow;
+                var leaderEnd;
+                var leaderPosition;
+                var leaderRotation;
+                var leaderTail = arrowSize;
+                var leaderWidth = textWidth;
+                if (leader) {
+                    var run = leader.diagonalRun === undefined ? textHeight * .8 : leader.diagonalRun;
+                    var rise = leader.diagonalRise === undefined ? textHeight * 35 / 75 : leader.diagonalRise;
+                    var landing = leader.landingLength === undefined ? textHeight * 1.6 : leader.landingLength;
+                    var gap = leader.textGap === undefined ? textHeight * .16 : leader.textGap;
+                    var tail = leader.arrowTailLength === undefined ? arrowSize : leader.arrowTailLength;
+                    [run, rise, landing, gap, tail].forEach(function (value) { if (!isFinite(value) || value < 0)
+                        throw new RangeError('Text leader lengths must be finite and nonnegative.'); });
+                    if (run === 0 || landing === 0)
+                        throw new RangeError('Text leader run and landingLength must be positive.');
+                    var side = leader.side === 'negative' ? -1 : 1;
+                    var along = leader.alongDirection === -1 ? -1 : 1;
+                    var anchor = leader.attachment === 'start' ? dimStart : dimEnd;
+                    leaderElbow = MakerJs.point.add(MakerJs.point.add(anchor, polar(perpAngle, side * run)), polar(baseAngle, along * rise));
+                    leaderEnd = MakerJs.point.add(leaderElbow, polar(baseAngle, along * landing));
+                    leaderPosition = MakerJs.point.add(MakerJs.point.average(leaderElbow, leaderEnd), polar(perpAngle, side * gap));
+                    leaderRotation = baseAngle > 90 && baseAngle <= 270 ? baseAngle - 180 : baseAngle;
+                    leaderTail = Math.max(arrowSize, tail);
+                    leaderWidth = landing;
+                }
                 var addRenderGeometry = function (target, resolvedText, splitDimensionLine) {
                     target.paths = target.paths || {};
                     target.models = target.models || {};
@@ -11582,15 +11670,19 @@ var MakerJs;
                     var textAlongDimension = dotProduct(textFromStart, dimensionAxis);
                     var textStartDistance = textAlongDimension - textWidth / 2;
                     var textEndDistance = textAlongDimension + textWidth / 2;
-                    var lineStartDistance = options.arrowPlacement === 'outside'
-                        ? Math.min(-arrowSize, textStartDistance - (textStartDistance < 0 ? outsideTextPadding : arrowSize))
-                        : 0;
-                    var lineEndDistance = options.arrowPlacement === 'outside'
-                        ? Math.max(measuredValue + arrowSize, textEndDistance + (textEndDistance > measuredValue ? outsideTextPadding : arrowSize))
-                        : measuredValue;
+                    var lineStartDistance = markers && markers.start && markers.start !== 'arrow' ? 0
+                        : leader ? (options.arrowPlacement === 'outside' ? -leaderTail : 0)
+                            : options.arrowPlacement === 'outside'
+                                ? Math.min(-arrowSize, textStartDistance - (textStartDistance < 0 ? outsideTextPadding : arrowSize))
+                                : 0;
+                    var lineEndDistance = markers && markers.end && markers.end !== 'arrow' ? measuredValue
+                        : leader ? measuredValue + (options.arrowPlacement === 'outside' ? leaderTail : 0)
+                            : options.arrowPlacement === 'outside'
+                                ? Math.max(measuredValue + arrowSize, textEndDistance + (textEndDistance > measuredValue ? outsideTextPadding : arrowSize))
+                                : measuredValue;
                     var dimensionLineStart = MakerJs.point.add(dimStart, polar(baseAngle, lineStartDistance));
                     var dimensionLineEnd = MakerJs.point.add(dimStart, polar(baseAngle, lineEndDistance));
-                    if (splitDimensionLine) {
+                    if (splitDimensionLine && !leader) {
                         var textDistanceFromDimension = Math.abs(textFromStart[0] * dimensionAxis[1] - textFromStart[1] * dimensionAxis[0]);
                         var shouldBreakDimensionLine = textAlongDimension > 0
                             && textAlongDimension < measuredValue
@@ -11613,8 +11705,16 @@ var MakerJs;
                     target.models.arrow2 = createArrow(dimEnd, arrow2Angle, arrowSize);
                     target.models.arrow1.layer = layer;
                     target.models.arrow2.layer = layer;
-                    var textAnchorStart = MakerJs.point.add(resolvedText.textPosition, polar(resolvedText.textRotation + 180, textWidth / 2));
-                    var textAnchorEnd = MakerJs.point.add(resolvedText.textPosition, polar(resolvedText.textRotation, textWidth / 2));
+                    if (markers) {
+                        endpointMarker(target, 'arrow1', markers.start, dimStart, jointRadius, layer);
+                        endpointMarker(target, 'arrow2', markers.end, dimEnd, jointRadius, layer);
+                    }
+                    if (leader) {
+                        target.paths.textLeaderDiagonal = asLayer(new MakerJs.paths.Line(leader.attachment === 'start' ? dimStart : dimEnd, leaderElbow), layer);
+                        target.paths.textLeaderLanding = asLayer(new MakerJs.paths.Line(leaderElbow, leaderEnd), layer);
+                    }
+                    var textAnchorStart = MakerJs.point.add(resolvedText.textPosition, polar(resolvedText.textRotation + 180, leaderWidth / 2));
+                    var textAnchorEnd = MakerJs.point.add(resolvedText.textPosition, polar(resolvedText.textRotation, leaderWidth / 2));
                     target.caption = {
                         text: captionText,
                         anchor: new MakerJs.paths.Line(textAnchorStart, textAnchorEnd)
@@ -11622,10 +11722,11 @@ var MakerJs;
                     target.caption.anchor.layer = layer;
                     target.layer = layer;
                 };
-                var resolvedText = resolveDimensionTextOptions(options, defaultTextPosition, baseAngle);
-                var useOutsideTextPosition = options.arrowPlacement === 'outside' && !!options.textPosition;
+                var leaderTextOptions = leader ? { textPosition: leaderPosition, textRotation: leaderRotation } : options;
+                var resolvedText = resolveDimensionTextOptions(leaderTextOptions, defaultTextPosition, baseAngle);
+                var useOutsideTextPosition = !!leader || (options.arrowPlacement === 'outside' && !!options.textPosition);
                 var dxfTextOptions = useOutsideTextPosition
-                    ? { textPosition: options.textPosition, textRotation: options.textRotation }
+                    ? { textPosition: resolvedText.textPosition, textRotation: resolvedText.textRotation }
                     : { textRotation: options.textRotation };
                 var dxfResolvedText = resolveDimensionTextOptions(dxfTextOptions, defaultTextPosition, baseAngle);
                 addRenderGeometry(this, resolvedText, false);
@@ -11657,6 +11758,17 @@ var MakerJs;
                     textRotation: dxfResolvedText.textRotation,
                     dxfTextPosition: useOutsideTextPosition ? dxfResolvedText.textPosition : undefined
                 };
+                if (leader || markers) {
+                    [this, this.dxfModel].forEach(function (target) {
+                        var data = target.dimensionData;
+                        if (leader)
+                            data.textLeader = true;
+                        if (markers)
+                            data.endpointMarkers = true;
+                        data.textHeight = textHeight;
+                        data.explicitTextHeightRatio = textHeight / MakerJs.measure.pathLength(target.caption.anchor);
+                    });
+                }
             }
             return LinearDimension;
         }());
